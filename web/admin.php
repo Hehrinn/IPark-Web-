@@ -15,6 +15,9 @@ require_once(__DIR__ . '/Models/Parking.php');
 
 requireAdmin();
 
+// Run automatic processes
+$reservation_model->processCompletedReservations();
+
 $admin_id = getCurrentAdminId();
 $admin_model = new Admin($conn);
 $user_model = new User($conn);
@@ -46,6 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // TRIGGER: Lock slot globally only on approval
             if ($status === 'approved' && $res) {
                 $parking_model->updateSlotStatus($res['parking_slot_id'], 'reserved');
+                $reservation_model->updatePaymentStatus($reservation_id, 'paid');
             }
         } else {
             $_SESSION['flash_message'] = ['error' => 'Failed to update reservation'];
@@ -54,7 +58,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: admin.php?page=dashboard');
         exit();
     }
-    
+    elseif ($action === 'delete_reservation') {
+        $reservation_id = intval($_POST['reservation_id'] ?? 0);
+        $res = $reservation_model->getReservationById($reservation_id);
+        if ($res && $reservation_model->adminDeleteReservation($reservation_id)) {
+            $parking_model->updateSlotStatus($res['parking_slot_id'], 'available');
+            $_SESSION['flash_message'] = ['success' => 'Reservation deleted successfully.'];
+        } else {
+            $_SESSION['flash_message'] = ['error' => 'Failed to delete reservation.'];
+        }
+        header('Location: admin.php?page=dashboard');
+        exit();
+    }
+
+    // 4. Add Parking Slot CRUD Actions
+    elseif ($page === 'parking' && $action === 'create_slot') {
+        $slot_number = trim($_POST['slot_number'] ?? '');
+        $floor_level = intval($_POST['floor_level'] ?? 1);
+        $parking_lot = trim($_POST['parking_lot'] ?? '');
+        $hourly_rate = floatval($_POST['hourly_rate'] ?? 0);
+
+        if ($parking_model->createSlot($slot_number, $floor_level, $parking_lot, 'car', $hourly_rate)) {
+            $_SESSION['flash_message'] = ['success' => 'Parking slot created successfully.'];
+        } else {
+            $_SESSION['flash_message'] = ['error' => 'Failed to create slot. It may already exist.'];
+        }
+        header('Location: admin.php?page=parking');
+        exit();
+    }
+    elseif ($page === 'parking' && $action === 'delete_slot') {
+        $slot_id = intval($_POST['slot_id'] ?? 0);
+        if ($parking_model->deleteSlot($slot_id)) {
+            $_SESSION['flash_message'] = ['success' => 'Parking slot deleted successfully.'];
+        } else {
+            $_SESSION['flash_message'] = ['error' => 'Failed to delete slot. It may have active reservations.'];
+        }
+        header('Location: admin.php?page=parking');
+        exit();
+    }
     elseif ($page === 'staff' && $action === 'create') {
         requireAdminRole('super_admin');
         $username = trim($_POST['username'] ?? '');
@@ -123,8 +164,8 @@ if ($page === 'dashboard') {
     $kpi_query = "
         SELECT 
             (SELECT COUNT(*) FROM ipark_reservations WHERE DATE(created_at) = CURDATE()) as today_reservations,
-            (SELECT SUM(total_amount) FROM ipark_reservations WHERE DATE(created_at) = CURDATE() AND payment_status = 'paid') as today_revenue,
-            (SELECT COUNT(*) FROM ipark_parking_slots WHERE status = 'occupied') as occupied_slots,
+            (SELECT SUM(total_amount) FROM ipark_reservations WHERE DATE(created_at) = CURDATE() AND reservation_status IN ('approved', 'completed')) as today_revenue,
+            (SELECT COUNT(*) FROM ipark_parking_slots WHERE status != 'available') as occupied_slots,
             (SELECT COUNT(*) FROM ipark_parking_slots) as total_slots,
             (SELECT COUNT(*) FROM ipark_users WHERE is_active = TRUE) as active_users,
             (SELECT COUNT(*) FROM ipark_reservations WHERE reservation_status = 'pending_approval') as pending_approvals
@@ -154,6 +195,7 @@ elseif ($page === 'reports') {
     $revenue = $report_model->getRevenueReport();
     $top_lots = $report_model->getTopParkingLots();
     $user_activity = $report_model->getUserActivityReport(10);
+    $reservation_history = $reservation_model->getPastReservations(50);
     $total_revenue = $report_model->getTotalRevenue();
 }
 elseif ($page === 'staff') {
@@ -168,6 +210,10 @@ elseif ($page === 'users') {
     $users = $user_model->getAllUsers($limit, $offset);
     $total_users = $user_model->getTotalUserCount();
     $total_pages = ceil($total_users / $limit);
+}
+elseif ($page === 'parking') {
+    requireAdminRole('admin', 'super_admin');
+    $all_slots = $parking_model->getAllSlots();
 }
 
 ?>
@@ -194,6 +240,14 @@ elseif ($page === 'users') {
             <a class="flex items-center gap-3 px-3 py-2.5 <?php echo $page === 'dashboard' ? 'bg-primary/10 text-primary' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'; ?> rounded-lg font-medium transition-colors" href="?page=dashboard">
                 <span class="material-symbols-outlined text-xl">dashboard</span>
                 <span>Dashboard</span>
+            </a>
+            <a class="flex items-center gap-3 px-3 py-2.5 <?php echo $page === 'parking' ? 'bg-primary/10 text-primary' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'; ?> rounded-lg font-medium transition-colors" href="?page=parking">
+                <span class="material-symbols-outlined text-xl">local_parking</span>
+                <span>Parking Management</span>
+            </a>
+            <a class="flex items-center gap-3 px-3 py-2.5 <?php echo $page === 'parking' ? 'bg-primary/10 text-primary' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'; ?> rounded-lg font-medium transition-colors" href="?page=parking">
+                <span class="material-symbols-outlined text-xl">local_parking</span>
+                <span>Parking Management</span>
             </a>
             <a class="flex items-center gap-3 px-3 py-2.5 <?php echo $page === 'users' ? 'bg-primary/10 text-primary' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'; ?> rounded-lg font-medium transition-colors" href="?page=users">
                 <span class="material-symbols-outlined text-xl">group</span>
@@ -334,7 +388,7 @@ elseif ($page === 'users') {
                                     <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($res['slot_number']); ?></td>
                                     <td class="px-6 py-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($res['parking_lot']); ?></td>
                                     <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white">₱<?php echo number_format($res['total_amount'] ?? 0, 2); ?></td>
-                                    <td class="px-6 py-4 text-center">
+                                    <td class="px-6 py-4 text-center whitespace-nowrap">
                                         <span class="px-2.5 py-1 rounded-full text-xs font-bold 
                                             <?php 
                                                 if ($res['reservation_status'] === 'approved') echo 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400';
@@ -344,8 +398,9 @@ elseif ($page === 'users') {
                                             <?php echo ucfirst(str_replace('_', ' ', $res['reservation_status'])); ?>
                                         </span>
                                     </td>
-                                    <td class="px-6 py-4 text-center">
-                                        <?php if ($res['reservation_status'] === 'pending_approval'): ?>
+                                    <td class="px-6 py-4 text-center whitespace-nowrap">
+                                        <div class="flex items-center justify-center gap-2">
+                                            <?php if ($res['reservation_status'] === 'pending_approval'): ?>
                                             <div class="flex items-center justify-center gap-2">
                                                 <form method="POST" action="">
                                                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
@@ -364,7 +419,16 @@ elseif ($page === 'users') {
                                                     </button>
                                                 </form>
                                             </div>
-                                        <?php endif; ?>
+                                            <?php endif; ?>
+                                            <form method="POST" action="" onsubmit="return confirm('Are you sure you want to permanently delete this reservation?');">
+                                                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+                                                <input type="hidden" name="action" value="delete_reservation">
+                                                <input type="hidden" name="reservation_id" value="<?php echo $res['id']; ?>">
+                                                <button type="submit" class="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200" title="Delete">
+                                                    <span class="material-symbols-outlined text-sm">delete</span>
+                                                </button>
+                                            </form>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -445,6 +509,80 @@ elseif ($page === 'users') {
                         </div>
                         <?php endforeach; ?>
                     </div>
+                </div>
+            </div>
+
+            <!-- Reservation History -->
+            <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6">
+                <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Reservation History</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="text-left py-3 px-4 font-semibold text-slate-900 dark:text-white">User</th>
+                                <th class="text-left py-3 px-4 font-semibold text-slate-900 dark:text-white">Slot</th>
+                                <th class="text-right py-3 px-4 font-semibold text-slate-900 dark:text-white">Amount</th>
+                                <th class="text-center py-3 px-4 font-semibold text-slate-900 dark:text-white">Status</th>
+                                <th class="text-right py-3 px-4 font-semibold text-slate-900 dark:text-white">Checkout Date</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
+                            <?php foreach ($reservation_history as $res): ?>
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                                <td class="py-3 px-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($res['full_name']); ?></td>
+                                <td class="py-3 px-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($res['slot_number']); ?></td>
+                                <td class="py-3 px-4 text-right font-bold text-primary">₱<?php echo number_format($res['total_amount'] ?? 0, 2); ?></td>
+                                <td class="px-6 py-4 text-center">
+                                    <span class="px-2.5 py-1 rounded-full text-xs font-bold 
+                                        <?php 
+                                            if ($res['reservation_status'] === 'completed') echo 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
+                                            else echo 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300';
+                                        ?>">
+                                        <?php echo ucfirst(str_replace('_', ' ', $res['reservation_status'])); ?>
+                                    </span>
+                                </td>
+                                <td class="py-3 px-4 text-right text-slate-600 dark:text-slate-400"><?php echo date('M d, Y', strtotime($res['end_time'])); ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Reservation History -->
+            <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6">
+                <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Reservation History</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="text-left py-3 px-4 font-semibold text-slate-900 dark:text-white">User</th>
+                                <th class="text-left py-3 px-4 font-semibold text-slate-900 dark:text-white">Slot</th>
+                                <th class="text-right py-3 px-4 font-semibold text-slate-900 dark:text-white">Amount</th>
+                                <th class="text-center py-3 px-4 font-semibold text-slate-900 dark:text-white">Status</th>
+                                <th class="text-right py-3 px-4 font-semibold text-slate-900 dark:text-white">Checkout Date</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
+                            <?php foreach ($reservation_history as $res): ?>
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                                <td class="py-3 px-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($res['full_name']); ?></td>
+                                <td class="py-3 px-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($res['slot_number']); ?></td>
+                                <td class="py-3 px-4 text-right font-bold text-primary">₱<?php echo number_format($res['total_amount'] ?? 0, 2); ?></td>
+                                <td class="px-6 py-4 text-center">
+                                    <span class="px-2.5 py-1 rounded-full text-xs font-bold 
+                                        <?php 
+                                            if ($res['reservation_status'] === 'completed') echo 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
+                                            else echo 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300';
+                                        ?>">
+                                        <?php echo ucfirst(str_replace('_', ' ', $res['reservation_status'])); ?>
+                                    </span>
+                                </td>
+                                <td class="py-3 px-4 text-right text-slate-600 dark:text-slate-400"><?php echo date('M d, Y', strtotime($res['end_time'])); ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -584,6 +722,194 @@ elseif ($page === 'users') {
                             </div>
                         </div>
                         <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PARKING MANAGEMENT PAGE -->
+        <?php elseif ($page === 'parking'): ?>
+
+        <div class="max-w-[1200px] mx-auto px-4 md:px-10 lg:px-40 py-10">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Create New Slot Form -->
+                <div class="lg:col-span-1">
+                    <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6 sticky top-20">
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Add New Slot</h3>
+                        
+                        <form method="POST" class="space-y-3">
+                            <input type="hidden" name="action" value="create_slot">
+                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Slot Number</label>
+                                <input type="text" name="slot_number" required placeholder="e.g., A-01"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Parking Lot</label>
+                                <input type="text" name="parking_lot" required placeholder="e.g., Main Garage"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Floor Level</label>
+                                <input type="number" name="floor_level" required value="1"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Hourly Rate (₱)</label>
+                                <input type="number" step="0.01" name="hourly_rate" required placeholder="30.00"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <button type="submit" class="w-full bg-primary text-white font-bold py-2 rounded-lg hover:bg-primary/90 transition-colors text-sm">
+                                Add Slot
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Slot List -->
+                <div class="lg:col-span-2">
+                    <h1 class="text-3xl font-bold text-slate-900 dark:text-white mb-2">Parking Slots</h1>
+                    <p class="text-slate-600 dark:text-slate-400 mb-6"><?php echo count($all_slots); ?> total slots</p>
+
+                    <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+                        <table class="w-full text-sm">
+                            <thead class="bg-slate-50 dark:bg-slate-800/50 text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-4 text-left">Slot</th>
+                                    <th class="px-6 py-4 text-left">Location</th>
+                                    <th class="px-6 py-4 text-right">Rate</th>
+                                    <th class="px-6 py-4 text-center">Status</th>
+                                    <th class="px-6 py-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
+                                <?php foreach ($all_slots as $slot): ?>
+                                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                                        <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($slot['slot_number']); ?></td>
+                                        <td class="px-6 py-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($slot['parking_lot']); ?> (F<?php echo $slot['floor_level']; ?>)</td>
+                                        <td class="px-6 py-4 text-right font-semibold text-slate-900 dark:text-white">₱<?php echo number_format($slot['hourly_rate'], 2); ?></td>
+                                        <td class="px-6 py-4 text-center">
+                                            <span class="px-2.5 py-1 rounded-full text-xs font-bold <?php echo $slot['status'] === 'available' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'; ?>">
+                                                <?php echo ucfirst($slot['status']); ?>
+                                            </span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center">
+                                            <div class="flex items-center justify-center gap-2">
+                                                <!-- Note: A full 'Edit' feature would require a separate page or modal for a better user experience. -->
+                                                <form method="POST" onsubmit="return confirm('Delete this slot? This cannot be undone.');">
+                                                    <input type="hidden" name="action" value="delete_slot">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+                                                    <input type="hidden" name="slot_id" value="<?php echo $slot['id']; ?>">
+                                                    <button type="submit" class="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200" title="Delete Slot">
+                                                        <span class="material-symbols-outlined text-sm">delete</span>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PARKING MANAGEMENT PAGE -->
+        <?php elseif ($page === 'parking'): ?>
+
+        <div class="max-w-[1200px] mx-auto px-4 md:px-10 lg:px-40 py-10">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Create New Slot Form -->
+                <div class="lg:col-span-1">
+                    <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6 sticky top-20">
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Add New Slot</h3>
+                        
+                        <form method="POST" class="space-y-3">
+                            <input type="hidden" name="action" value="create_slot">
+                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Slot Number</label>
+                                <input type="text" name="slot_number" required placeholder="e.g., A-01"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Parking Lot</label>
+                                <input type="text" name="parking_lot" required placeholder="e.g., Main Garage"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Floor Level</label>
+                                <input type="number" name="floor_level" required value="1"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <div>
+                                <label class="text-xs font-semibold text-slate-900 dark:text-white block mb-1">Hourly Rate (₱)</label>
+                                <input type="number" step="0.01" name="hourly_rate" required placeholder="30.00"
+                                       class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
+                            </div>
+
+                            <button type="submit" class="w-full bg-primary text-white font-bold py-2 rounded-lg hover:bg-primary/90 transition-colors text-sm">
+                                Add Slot
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Slot List -->
+                <div class="lg:col-span-2">
+                    <h1 class="text-3xl font-bold text-slate-900 dark:text-white mb-2">Parking Slots</h1>
+                    <p class="text-slate-600 dark:text-slate-400 mb-6"><?php echo count($all_slots); ?> total slots</p>
+
+                    <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+                        <table class="w-full text-sm">
+                            <thead class="bg-slate-50 dark:bg-slate-800/50 text-slate-500 text-xs font-semibold uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-4 text-left">Slot</th>
+                                    <th class="px-6 py-4 text-left">Location</th>
+                                    <th class="px-6 py-4 text-right">Rate</th>
+                                    <th class="px-6 py-4 text-center">Status</th>
+                                    <th class="px-6 py-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
+                                <?php foreach ($all_slots as $slot): ?>
+                                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                                        <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($slot['slot_number']); ?></td>
+                                        <td class="px-6 py-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($slot['parking_lot']); ?> (F<?php echo $slot['floor_level']; ?>)</td>
+                                        <td class="px-6 py-4 text-right font-semibold text-slate-900 dark:text-white">₱<?php echo number_format($slot['hourly_rate'], 2); ?></td>
+                                        <td class="px-6 py-4 text-center">
+                                            <span class="px-2.5 py-1 rounded-full text-xs font-bold <?php echo $slot['status'] === 'available' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'; ?>">
+                                                <?php echo ucfirst($slot['status']); ?>
+                                            </span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center">
+                                            <div class="flex items-center justify-center gap-2">
+                                                <!-- Note: A full 'Edit' feature would require a separate page or modal for a better user experience. -->
+                                                <form method="POST" onsubmit="return confirm('Delete this slot? This cannot be undone.');">
+                                                    <input type="hidden" name="action" value="delete_slot">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+                                                    <input type="hidden" name="slot_id" value="<?php echo $slot['id']; ?>">
+                                                    <button type="submit" class="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200" title="Delete Slot">
+                                                        <span class="material-symbols-outlined text-sm">delete</span>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>

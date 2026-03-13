@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCSRFToken($_POST['csrf_token'] ?? '')) {
         $error = 'Security token invalid. Please try again.';
     } else {
-        $email = trim(strtolower($_POST['email'] ?? ''));
+        $email = trim($_POST['email'] ?? ''); // Explicitly trim input as requested
         $password = trim($_POST['password'] ?? '');
         
         $result = loginUser($email, $password);
@@ -37,11 +37,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['flash_message'] = $result['message'];
             $_SESSION['flash_type'] = 'success';
             
-            // Clean Redirect: Check session variables directly after login
-            if (isset($_SESSION['admin_id'])) {
-                header('Location: admin.php');
+            // Clean Redirect using helper functions
+            if (isAdmin()) {
+                header('Location: ' . SITE_URL . '/admin.php');
                 exit();
-            } else {
+            } elseif (isUser()) {
                 header('Location: ' . SITE_URL . '/dashboard.php');
                 exit();
             }

@@ -15,6 +15,13 @@ class Reservation {
      * Create reservation
      */
     public function createReservation($user_id, $parking_slot_id, $start_time, $end_time, $total_amount) {
+        // Validation: Prevent past bookings
+        $start_dt = new DateTime($start_time);
+        $now = new DateTime();
+        if ($start_dt < $now) {
+            return false;
+        }
+
         $reservation_status = 'pending_approval';
         $stmt = $this->conn->prepare("
             INSERT INTO ipark_reservations 
@@ -190,6 +197,76 @@ class Reservation {
         $stmt = $this->conn->prepare("DELETE FROM ipark_reservations WHERE id = ? AND user_id = ?");
         $stmt->bind_param("ii", $reservation_id, $user_id);
         return $stmt->execute();
+    }
+    
+    /**
+     * Delete reservation (Admin - no user check)
+     */
+    public function adminDeleteReservation($reservation_id) {
+        $stmt = $this->conn->prepare("DELETE FROM ipark_reservations WHERE id = ?");
+        $stmt->bind_param("i", $reservation_id);
+        return $stmt->execute();
+    }
+
+    /**
+     * Get past reservations (completed, cancelled, rejected)
+     */
+    public function getPastReservations($limit = 50) {
+        $stmt = $this->conn->prepare("
+            SELECT r.id, r.check_in_time as start_time, r.check_out_time as end_time, 
+                   r.total_amount, r.reservation_status, r.created_at,
+                   s.slot_number, u.full_name
+            FROM ipark_reservations r
+            JOIN ipark_parking_slots s ON r.parking_slot_id = s.id
+            JOIN ipark_users u ON r.user_id = u.id
+            WHERE r.reservation_status IN ('completed', 'cancelled', 'rejected')
+            ORDER BY r.check_out_time DESC
+            LIMIT ?
+        ");
+        $stmt->bind_param("i", $limit);
+        $stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    }
+
+    /**
+     * Find expired 'approved' reservations, set them to 'completed', and free up their slots.
+     */
+    public function processCompletedReservations() {
+        // Find reservations that are 'approved' and have passed their checkout time
+        $stmt = $this->conn->prepare("
+            SELECT id, parking_slot_id 
+            FROM ipark_reservations 
+            WHERE check_out_time < NOW() AND reservation_status = 'approved'
+        ");
+        $stmt->execute();
+        $reservations_to_complete = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+
+        if (empty($reservations_to_complete)) {
+            return 0;
+        }
+
+        $reservation_ids = array_column($reservations_to_complete, 'id');
+        $slot_ids = array_unique(array_column($reservations_to_complete, 'parking_slot_id'));
+
+        // Update slots to 'available'
+        if (!empty($slot_ids)) {
+            $slot_placeholders = implode(',', array_fill(0, count($slot_ids), '?'));
+            $slot_stmt = $this->conn->prepare("UPDATE ipark_parking_slots SET status = 'available', updated_at = NOW() WHERE id IN ($slot_placeholders)");
+            $slot_stmt->bind_param(str_repeat('i', count($slot_ids)), ...$slot_ids);
+            $slot_stmt->execute();
+            $slot_stmt->close();
+        }
+
+        // Update reservations to 'completed'
+        $res_placeholders = implode(',', array_fill(0, count($reservation_ids), '?'));
+        $res_stmt = $this->conn->prepare("UPDATE ipark_reservations SET reservation_status = 'completed', updated_at = NOW() WHERE id IN ($res_placeholders)");
+        $res_stmt->bind_param(str_repeat('i', count($reservation_ids)), ...$reservation_ids);
+        $res_stmt->execute();
+        $updated_count = $res_stmt->affected_rows;
+        $res_stmt->close();
+
+        return $updated_count;
     }
     
     /**

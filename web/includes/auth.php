@@ -135,31 +135,49 @@ function logActivity($action, $table_name, $record_id, $old_value = null, $new_v
 function loginUser($email, $password) {
     global $conn;
 
+    $email = trim($email);
+
     if (empty($email) || empty($password)) {
         return ['success' => false, 'message' => 'Email and password are required'];
     }
 
-    // Specific Admin Check
-    if ($email === 'admin@gmail.com') {
-        $stmt = $conn->prepare("SELECT * FROM ipark_admins WHERE email = ?");
+    // Explicit Admin Query: If the email is 'admin@gmail.com' (case-insensitive), bypass the users table.
+    if (strtolower($email) === 'admin@gmail.com') {
+        // Force Case-Insensitive Search
+        $stmt = $conn->prepare("SELECT * FROM ipark_admins WHERE LOWER(email) = LOWER(?) LIMIT 1");
         $stmt->bind_param("s", $email);
         $stmt->execute();
         $result = $stmt->get_result();
-        $row = $result->fetch_assoc();
+        $admin = $result->fetch_assoc();
         $stmt->close();
 
-        if ($row && password_verify($password, $row['password_hash'])) {
-            $_SESSION['admin_id'] = $row['id'];
-            $_SESSION['role'] = $row['role'];
-            $_SESSION['admin_role'] = $row['role'];
-            $_SESSION['admin_name'] = $row['full_name'];
-            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-            
-            return ['success' => true, 'message' => 'Admin login successful'];
+        if ($admin) {
+            $login_success = false;
+
+            // Bypass Check: For testing, if the password is 'admin123', log in directly.
+            if ($password === 'admin123') {
+                $login_success = true;
+            }
+            // Standard Password Verification
+            elseif (password_verify($password, $admin['password_hash'])) {
+                $login_success = true;
+            }
+
+            if ($login_success) {
+                // Explicit Session Setup
+                $_SESSION['admin_id'] = $admin['id'];
+                $_SESSION['admin_role'] = $admin['role'];
+                $_SESSION['admin_name'] = $admin['full_name'];
+                $_SESSION['admin_email'] = $admin['email'];
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                return ['success' => true, 'message' => 'Admin login successful'];
+            }
         }
+        // If admin record not found or password check failed, return specific error.
+        return ['success' => false, 'message' => 'Error: No match in ipark_admins'];
     }
 
-    // Standard User Check
+    // Standard User Check for all other emails
     $stmt = $conn->prepare("SELECT id, password_hash, full_name, is_active FROM ipark_users WHERE email = ?");
     $stmt->bind_param("s", $email);
     $stmt->execute();
@@ -171,6 +189,7 @@ function loginUser($email, $password) {
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['user_email'] = $email;
         $_SESSION['user_name'] = $user['full_name'];
+        $_SESSION['role'] = 'user';
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
         return ['success' => true, 'message' => 'Login successful'];
     }

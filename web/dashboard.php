@@ -307,11 +307,11 @@ if ($page === 'reservations' && isset($_GET['edit_id'])) {
                         </div>
                         
                         <h3 class="text-xl font-bold text-slate-800 dark:text-white mb-1"><?php echo htmlspecialchars($slot['slot_number']); ?></h3>
-                        <p class="text-sm text-slate-500 mb-4"><?php echo htmlspecialchars($slot['parking_lot']); ?> • Floor <?php echo htmlspecialchars($slot['floor_level']); ?></p>
+                        <p class="text-sm text-slate-500 mb-4">USLS • Floor <?php echo htmlspecialchars($slot['floor_level']); ?></p>
                         
                         <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-2">
                             <span class="material-symbols-outlined text-base">directions_car</span>
-                            <?php echo ucfirst($slot['vehicle_type']); ?>
+                            Car
                         </div>
                         <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                             <span class="material-symbols-outlined text-base">payments</span>

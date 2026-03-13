@@ -115,10 +115,39 @@ class Parking {
             (slot_number, floor_level, parking_lot, vehicle_type, status, hourly_rate) 
             VALUES (?, ?, ?, ?, ?, ?)
         ");
-        $stmt->bind_param("ssssd", $slot_number, $floor_level, $parking_lot, $vehicle_type, $hourly_rate);
+        $stmt->bind_param("sisssd", $slot_number, $floor_level, $parking_lot, $vehicle_type, $status, $hourly_rate);
         return $stmt->execute();
     }
     
+    /**
+     * Update parking slot
+     */
+    public function updateSlot($slot_id, $slot_number, $floor_level, $parking_lot, $hourly_rate) {
+        $stmt = $this->conn->prepare("
+            UPDATE ipark_parking_slots 
+            SET slot_number = ?, floor_level = ?, parking_lot = ?, hourly_rate = ?, updated_at = NOW() 
+            WHERE id = ?
+        ");
+        $stmt->bind_param("sisdi", $slot_number, $floor_level, $parking_lot, $hourly_rate, $slot_id);
+        return $stmt->execute();
+    }
+
+    /**
+     * Delete parking slot
+     */
+    public function deleteSlot($slot_id) {
+        // Basic check to prevent deleting a slot with current reservations
+        $check_stmt = $this->conn->prepare("SELECT COUNT(*) as count FROM ipark_reservations WHERE parking_slot_id = ? AND reservation_status IN ('approved', 'active', 'pending_approval')");
+        $check_stmt->bind_param("i", $slot_id);
+        $check_stmt->execute();
+        if ($check_stmt->get_result()->fetch_assoc()['count'] > 0) {
+            return false; // Cannot delete, has active reservations
+        }
+        $stmt = $this->conn->prepare("DELETE FROM ipark_parking_slots WHERE id = ?");
+        $stmt->bind_param("i", $slot_id);
+        return $stmt->execute();
+    }
+
     /**
      * Check if slot number exists
      */
