@@ -84,7 +84,7 @@ function requireUser() {
 // Redirects to admin login if not authenticated as admin
 function requireAdmin() {
     if (!isAdmin()) {
-        header('Location: ' . SITE_URL . '/admin/login.php');
+        header('Location: ' . SITE_URL . '/index.php');
         exit();
     }
 }
@@ -134,60 +134,48 @@ function logActivity($action, $table_name, $record_id, $old_value = null, $new_v
 // Login a user
 function loginUser($email, $password) {
     global $conn;
-    
+
     if (empty($email) || empty($password)) {
         return ['success' => false, 'message' => 'Email and password are required'];
     }
-    
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        return ['success' => false, 'message' => 'Invalid email format'];
-    }
-    
-    // 1. Check Users Table
-    $stmt = $conn->prepare("SELECT id, password_hash, full_name, email_verified_at, is_active FROM ipark_users WHERE email = ?");
-    $stmt->bind_param("s", $email);
-    if (!$stmt->execute()) {
+
+    // Specific Admin Check
+    if ($email === 'admin@gmail.com') {
+        $stmt = $conn->prepare("SELECT * FROM ipark_admins WHERE email = ?");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = $result->fetch_assoc();
         $stmt->close();
-        return ['success' => false, 'message' => 'Database error in user query: ' . $conn->error];
+
+        if ($row && password_verify($password, $row['password_hash'])) {
+            $_SESSION['admin_id'] = $row['id'];
+            $_SESSION['role'] = $row['role'];
+            $_SESSION['admin_role'] = $row['role'];
+            $_SESSION['admin_name'] = $row['full_name'];
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            
+            return ['success' => true, 'message' => 'Admin login successful'];
+        }
     }
-    $userResult = $stmt->get_result();
-    $user = $userResult->fetch_assoc();
+
+    // Standard User Check
+    $stmt = $conn->prepare("SELECT id, password_hash, full_name, is_active FROM ipark_users WHERE email = ?");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $user = $result->fetch_assoc();
     $stmt->close();
-    
-    if ($user && $user['is_active'] && verifyPassword($password, $user['password_hash'])) {
+
+    if ($user && password_verify($password, $user['password_hash'])) {
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['user_email'] = $email;
         $_SESSION['user_name'] = $user['full_name'];
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-        
-        logActivity('user_login', 'ipark_users', $user['id']);
         return ['success' => true, 'message' => 'Login successful'];
     }
-    
-    // 2. Check Admins Table (if user not found or password failed)
-    $stmt = $conn->prepare("SELECT id, password_hash, full_name, role, is_active FROM ipark_admins WHERE email = ?");
-    $stmt->bind_param("s", $email);
-    if (!$stmt->execute()) {
-        $stmt->close();
-        return ['success' => false, 'message' => 'Database error in admin query: ' . $conn->error];
-    }
-    $adminResult = $stmt->get_result();
-    $admin = $adminResult->fetch_assoc();
-    $stmt->close();
 
-    if ($admin && $admin['is_active'] && verifyPassword($password, $admin['password_hash'])) {
-        $_SESSION['admin_id'] = $admin['id'];
-        $_SESSION['admin_email'] = $email;
-        $_SESSION['admin_name'] = $admin['full_name'];
-        $_SESSION['admin_role'] = $admin['role'];
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-
-        logActivity('admin_login', 'ipark_admins', $admin['id']);
-        return ['success' => true, 'message' => 'Admin login successful'];
-    }
-    
     // Login Failed
-    logActivity('failed_login_attempt', 'ipark_users', 0);
     return ['success' => false, 'message' => 'Invalid email or password'];
 }
 

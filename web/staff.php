@@ -158,7 +158,7 @@ if ($page === 'dashboard') {
                                     </div>
                                     <div>
                                         <p class="text-xs text-slate-500 dark:text-slate-400">Amount</p>
-                                        <p class="font-semibold text-primary">${<?php echo number_format($approval['total_amount'], 2); ?></p>
+                                        <p class="font-semibold text-primary">₱<?php echo number_format($approval['total_amount'], 2); ?></p>
                                     </div>
                                 </div>
 
@@ -213,7 +213,7 @@ if ($page === 'dashboard') {
                                 </div>
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">Amount</p>
-                                    <p class="font-bold text-primary text-lg">${<?php echo number_format($approval['total_amount'], 2); ?></p>
+                                    <p class="font-bold text-primary text-lg">₱<?php echo number_format($approval['total_amount'], 2); ?></p>
                                 </div>
                             </div>
 

@@ -169,6 +169,30 @@ class Reservation {
     }
     
     /**
+     * Update reservation details (Re-book)
+     */
+    public function updateReservationDetails($reservation_id, $user_id, $parking_slot_id, $start_time, $end_time, $total_amount) {
+        // Reset status to pending_approval on update so admin can review again
+        $status = 'pending_approval';
+        $stmt = $this->conn->prepare("
+            UPDATE ipark_reservations 
+            SET parking_slot_id = ?, check_in_time = ?, check_out_time = ?, total_amount = ?, reservation_status = ?, updated_at = NOW() 
+            WHERE id = ? AND user_id = ?
+        ");
+        $stmt->bind_param("issdsii", $parking_slot_id, $start_time, $end_time, $total_amount, $status, $reservation_id, $user_id);
+        return $stmt->execute();
+    }
+
+    /**
+     * Delete reservation (Permanently remove)
+     */
+    public function deleteReservation($reservation_id, $user_id) {
+        $stmt = $this->conn->prepare("DELETE FROM ipark_reservations WHERE id = ? AND user_id = ?");
+        $stmt->bind_param("ii", $reservation_id, $user_id);
+        return $stmt->execute();
+    }
+    
+    /**
      * Get today's reservations count
      */
     public function getTodayReservationsCount() {

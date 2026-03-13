@@ -10,6 +10,8 @@ require_once(__DIR__ . '/includes/auth.php');
 require_once(__DIR__ . '/Models/User.php');
 require_once(__DIR__ . '/Models/Admin.php');
 require_once(__DIR__ . '/Models/Report.php');
+require_once(__DIR__ . '/Models/Reservation.php');
+require_once(__DIR__ . '/Models/Parking.php');
 
 requireAdmin();
 
@@ -17,6 +19,8 @@ $admin_id = getCurrentAdminId();
 $admin_model = new Admin($conn);
 $user_model = new User($conn);
 $report_model = new Report($conn);
+$reservation_model = new Reservation($conn);
+$parking_model = new Parking($conn);
 $admin = $admin_model->getAdminById($admin_id);
 
 // Determine page from query string
@@ -28,8 +32,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCSRFToken($_POST['csrf_token'] ?? '');
     
     $action = $_POST['action'] ?? '';
+
+    // Handle Reservation Approval/Rejection (Dashboard)
+    if ($page === 'dashboard' && ($action === 'approve' || $action === 'reject')) {
+        $reservation_id = intval($_POST['reservation_id'] ?? 0);
+        $status = ($action === 'approve') ? 'approved' : 'rejected';
+        
+        // Fetch reservation to get slot ID
+        $res = $reservation_model->getReservationById($reservation_id);
+        
+        if ($reservation_model->updateReservationStatus($reservation_id, $status, $admin_id)) {
+            $_SESSION['flash_message'] = ['success' => 'Reservation ' . ucfirst($status)];
+            // TRIGGER: Lock slot globally only on approval
+            if ($status === 'approved' && $res) {
+                $parking_model->updateSlotStatus($res['parking_slot_id'], 'reserved');
+            }
+        } else {
+            $_SESSION['flash_message'] = ['error' => 'Failed to update reservation'];
+        }
+        
+        header('Location: admin.php?page=dashboard');
+        exit();
+    }
     
-    if ($page === 'staff' && $action === 'create') {
+    elseif ($page === 'staff' && $action === 'create') {
         requireAdminRole('super_admin');
         $username = trim($_POST['username'] ?? '');
         $email = trim($_POST['email'] ?? '');
@@ -114,7 +140,7 @@ if ($page === 'dashboard') {
         JOIN ipark_users u ON r.user_id = u.id
         JOIN ipark_parking_slots s ON r.parking_slot_id = s.id
         ORDER BY r.created_at DESC
-        LIMIT 10
+        LIMIT 15
     ";
     $reservations_result = $conn->query($reservations_query);
     $recent_reservations = [];
@@ -231,7 +257,7 @@ elseif ($page === 'users') {
                         </span>
                     </div>
                     <p class="text-sm text-slate-500 dark:text-slate-400 font-medium">Today's Revenue</p>
-                    <h3 class="text-2xl font-bold text-slate-900 dark:text-white mt-1">$<?php echo number_format($kpi_data['today_revenue'] ?? 0, 2); ?></h3>
+                    <h3 class="text-2xl font-bold text-slate-900 dark:text-white mt-1">₱<?php echo number_format($kpi_data['today_revenue'] ?? 0, 2); ?></h3>
                 </div>
 
                 <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -290,7 +316,8 @@ elseif ($page === 'users') {
                                 <th class="px-6 py-4 text-left">Slot</th>
                                 <th class="px-6 py-4 text-left">Location</th>
                                 <th class="px-6 py-4 text-left">Amount</th>
-                                <th class="px-6 py-4 text-left">Status</th>
+                                <th class="px-6 py-4 text-center">Status</th>
+                                <th class="px-6 py-4 text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
@@ -306,8 +333,8 @@ elseif ($page === 'users') {
                                     </td>
                                     <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white"><?php echo htmlspecialchars($res['slot_number']); ?></td>
                                     <td class="px-6 py-4 text-slate-600 dark:text-slate-400"><?php echo htmlspecialchars($res['parking_lot']); ?></td>
-                                    <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white">$<?php echo number_format($res['total_amount'] ?? 0, 2); ?></td>
-                                    <td class="px-6 py-4">
+                                    <td class="px-6 py-4 font-semibold text-slate-900 dark:text-white">₱<?php echo number_format($res['total_amount'] ?? 0, 2); ?></td>
+                                    <td class="px-6 py-4 text-center">
                                         <span class="px-2.5 py-1 rounded-full text-xs font-bold 
                                             <?php 
                                                 if ($res['reservation_status'] === 'approved') echo 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400';
@@ -316,6 +343,28 @@ elseif ($page === 'users') {
                                             ?>">
                                             <?php echo ucfirst(str_replace('_', ' ', $res['reservation_status'])); ?>
                                         </span>
+                                    </td>
+                                    <td class="px-6 py-4 text-center">
+                                        <?php if ($res['reservation_status'] === 'pending_approval'): ?>
+                                            <div class="flex items-center justify-center gap-2">
+                                                <form method="POST" action="">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+                                                    <input type="hidden" name="action" value="approve">
+                                                    <input type="hidden" name="reservation_id" value="<?php echo $res['id']; ?>">
+                                                    <button type="submit" class="p-1 rounded bg-green-100 text-green-700 hover:bg-green-200" title="Approve">
+                                                        <span class="material-symbols-outlined text-sm">check</span>
+                                                    </button>
+                                                </form>
+                                                <form method="POST" action="">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? ''; ?>">
+                                                    <input type="hidden" name="action" value="reject">
+                                                    <input type="hidden" name="reservation_id" value="<?php echo $res['id']; ?>">
+                                                    <button type="submit" class="p-1 rounded bg-red-100 text-red-700 hover:bg-red-200" title="Reject" onclick="return confirm('Reject this reservation?')">
+                                                        <span class="material-symbols-outlined text-sm">close</span>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -338,13 +387,13 @@ elseif ($page === 'users') {
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                 <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6">
                     <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Total Revenue</p>
-                    <h3 class="text-3xl font-bold text-primary">${<?php echo number_format($total_revenue, 2); ?></h3>
+                    <h3 class="text-3xl font-bold text-primary">₱<?php echo number_format($total_revenue, 2); ?></h3>
                     <p class="text-xs text-slate-600 dark:text-slate-400 mt-2">All time</p>
                 </div>
 
                 <div class="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 p-6">
                     <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Today's Revenue</p>
-                    <h3 class="text-3xl font-bold text-green-600">${<?php echo number_format($kpis['today_revenue'] ?? 0, 2); ?></h3>
+                    <h3 class="text-3xl font-bold text-green-600">₱<?php echo number_format($kpis['today_revenue'] ?? 0, 2); ?></h3>
                     <p class="text-xs text-slate-600 dark:text-slate-400 mt-2">Last 24 hours</p>
                 </div>
 
@@ -373,7 +422,7 @@ elseif ($page === 'users') {
                                 <div class="flex-1 bg-slate-200 dark:bg-slate-700 rounded-full h-2">
                                     <div class="bg-primary h-full rounded-full" style="width: <?php echo min(100, ($day['revenue'] / 1000) * 100); ?>%"></div>
                                 </div>
-                                <span class="font-bold text-slate-900 dark:text-white text-right min-w-[60px]">${<?php echo number_format($day['revenue'], 0); ?></span>
+                                <span class="font-bold text-slate-900 dark:text-white text-right min-w-[60px]">₱<?php echo number_format($day['revenue'], 0); ?></span>
                             </div>
                         </div>
                         <?php endforeach; ?>
@@ -390,7 +439,7 @@ elseif ($page === 'users') {
                                 <p class="text-xs text-slate-600 dark:text-slate-400"><?php echo $lot['reservations']; ?> reservations</p>
                             </div>
                             <div class="text-right">
-                                <p class="font-bold text-primary">${<?php echo number_format($lot['revenue'] ?? 0, 0); ?></p>
+                                <p class="font-bold text-primary">₱<?php echo number_format($lot['revenue'] ?? 0, 0); ?></p>
                                 <p class="text-xs text-slate-600 dark:text-slate-400"><?php echo $lot['occupied']; ?> occupied</p>
                             </div>
                         </div>
@@ -422,7 +471,7 @@ elseif ($page === 'users') {
                                     </div>
                                 </td>
                                 <td class="py-3 px-4 text-right font-semibold text-slate-900 dark:text-white"><?php echo $user['total_reservations'] ?? 0; ?></td>
-                                <td class="py-3 px-4 text-right font-bold text-primary">${<?php echo number_format($user['total_spent'] ?? 0, 2); ?></td>
+                                <td class="py-3 px-4 text-right font-bold text-primary">₱<?php echo number_format($user['total_spent'] ?? 0, 2); ?></td>
                                 <td class="py-3 px-4 text-right text-slate-600 dark:text-slate-400"><?php echo $user['last_reservation'] ? date('M d', strtotime($user['last_reservation'])) : 'N/A'; ?></td>
                             </tr>
                             <?php endforeach; ?>

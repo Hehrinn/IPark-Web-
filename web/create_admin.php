@@ -11,8 +11,8 @@ $role = 'super_admin'; // 'super_admin' ensures access to all features in admin.
 
 echo "<h1>Setting up Admin Account</h1>";
 
-// 1. Hash the password
-$password_hash = hashPassword($password);
+// 1. Hash the password using explicit config settings
+$password_hash = password_hash($password, PASSWORD_HASH_ALGO, PASSWORD_HASH_OPTIONS);
 
 // 2. Check if admin exists
 $stmt = $conn->prepare("SELECT id FROM ipark_admins WHERE email = ?");

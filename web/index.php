@@ -6,18 +6,16 @@
 require_once(__DIR__ . '/config/db.php');
 require_once(__DIR__ . '/includes/auth.php');
 
+// DEBUG: Enable Error Reporting
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 // If already logged in, redirect to appropriate dashboard
-if (isUser()) {
-    header('Location: ' . SITE_URL . '/dashboard.php');
+if (isAdmin()) {
+    header('Location: ' . SITE_URL . '/admin.php');
     exit();
-} elseif (isAdmin()) {
-    // Redirect based on admin role
-    $role = getCurrentUserRole();
-    if ($role === 'operator') {
-        header('Location: ' . SITE_URL . '/staff.php');
-    } else {
-        header('Location: ' . SITE_URL . '/admin.php');
-    }
+} elseif (isUser()) {
+    header('Location: ' . SITE_URL . '/dashboard.php');
     exit();
 }
 
@@ -30,8 +28,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCSRFToken($_POST['csrf_token'] ?? '')) {
         $error = 'Security token invalid. Please try again.';
     } else {
-        $email = trim($_POST['email'] ?? '');
-        $password = $_POST['password'] ?? '';
+        $email = trim(strtolower($_POST['email'] ?? ''));
+        $password = trim($_POST['password'] ?? '');
         
         $result = loginUser($email, $password);
         
@@ -39,15 +37,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['flash_message'] = $result['message'];
             $_SESSION['flash_type'] = 'success';
             
-            if (isAdmin()) {
-                // Redirect to Staff or Admin portal
-                $redirect = (getCurrentUserRole() === 'operator') ? '/staff.php' : '/admin.php';
+            // Clean Redirect: Check session variables directly after login
+            if (isset($_SESSION['admin_id'])) {
+                header('Location: admin.php');
+                exit();
             } else {
-                $redirect = '/dashboard.php';
+                header('Location: ' . SITE_URL . '/dashboard.php');
+                exit();
             }
-            
-            header('Location: ' . SITE_URL . $redirect);
-            exit();
         } else {
             $error = $result['message'];
         }
