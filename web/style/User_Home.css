@@ -1,0 +1,31 @@
+/* Typography */
+body {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Material Symbols Styling */
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Slot Grid Layout */
+.slot-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1.5rem;
+}
+
+/* Modal Toggle Style */
+#modal-toggle:checked ~ #reservation-modal {
+    display: flex;
+}
+
+/* Progress Animation */
+@keyframes progress {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(300%);
+    }
+}
